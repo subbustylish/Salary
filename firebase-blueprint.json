@@ -1,0 +1,112 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Employee or administrator profile in the company",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employee_id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "employee"] },
+        "department": { "type": "string" },
+        "joining_date": { "type": "string" },
+        "monthly_salary": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "avatar": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "employee_id", "name", "email", "username", "role", "department", "joining_date", "monthly_salary", "status", "created_at"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily employee attendance punch record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employee_id": { "type": "string" },
+        "date": { "type": "string" },
+        "login_time": { "type": "string" },
+        "logout_time": { "type": "string" },
+        "total_working_minutes": { "type": "number" },
+        "status": { "type": "string", "enum": ["present", "absent", "half_day", "permission", "wfh"] },
+        "missed_logout": { "type": "boolean" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "employee_id", "date", "total_working_minutes", "status", "created_at", "updated_at"]
+    },
+    "AttendanceException": {
+      "title": "AttendanceException",
+      "description": "Employee leave, permission or exception request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employee_id": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string", "enum": ["absent", "half_day", "permission", "wfh"] },
+        "permission_minutes": { "type": "number" },
+        "reason": { "type": "string" },
+        "approval_status": { "type": "string", "enum": ["approved", "pending", "rejected"] },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "employee_id", "date", "type", "reason", "approval_status", "created_at"]
+    },
+    "Holiday": {
+      "title": "Holiday",
+      "description": "Company declared holiday",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "date", "name", "created_at"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System audit trail record for tracking changes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "user_name": { "type": "string" },
+        "user_role": { "type": "string" },
+        "action": { "type": "string" },
+        "entity": { "type": "string", "enum": ["attendance", "employee", "salary", "holiday", "auth"] },
+        "details": { "type": "string" },
+        "previous_value": { "type": "string" },
+        "new_value": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "user_name", "user_role", "action", "entity", "details", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of company employees and admin users"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "AttendanceRecord",
+      "description": "Collection of punch-in and punch-out attendance records"
+    },
+    "/exceptions/{exceptionId}": {
+      "schema": "AttendanceException",
+      "description": "Collection of employee leave and permission requests"
+    },
+    "/holidays/{holidayId}": {
+      "schema": "Holiday",
+      "description": "Collection of company declared official holidays"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Collection of system action audit trails"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Z&T Salary Dashboard",
+  "description": "Employee Attendance, Leave, Working Hours and Salary Calculation Management System with 6-day work week rules and audit trail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

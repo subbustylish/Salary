@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Users & employee directory
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Daily punch-in/punch-out attendance records
+    match /attendance/{attendanceId} {
+      allow read, write: if true;
+    }
+
+    // Leave & permission exception requests
+    match /exceptions/{exceptionId} {
+      allow read, write: if true;
+    }
+
+    // Company declared official holidays
+    match /holidays/{holidayId} {
+      allow read, write: if true;
+    }
+
+    // System audit logs
+    match /audit_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    // Notification contacts & preferences
+    match /settings/{docId} {
+      allow read, write: if true;
+    }
+
+    // Default deny all other paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
