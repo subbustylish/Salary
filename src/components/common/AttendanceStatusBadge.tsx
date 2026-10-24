@@ -8,21 +8,31 @@ interface Props {
 }
 
 export const AttendanceStatusBadge: React.FC<Props> = ({ status, subLabel, missedLogout }) => {
-  if (missedLogout) {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200" title="Present (Auto logoff triggered at 6:30 PM)">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-        Present <span className="font-medium text-[10px] text-amber-800 bg-amber-100/90 px-1 py-0.2 rounded border border-amber-300">Auto Out</span>
+  const renderAutoOut = () =>
+    missedLogout ? (
+      <span
+        className="font-medium text-[10px] text-amber-800 bg-amber-100/90 px-1 py-0.2 rounded border border-amber-300 ml-1"
+        title="Auto logoff @ 6:30 PM applied"
+      >
+        Auto Out
       </span>
-    );
-  }
+    ) : null;
 
   switch (status) {
+    case 'wfh':
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+          WFH {subLabel && <span className="font-normal opacity-80 text-[10px]">({subLabel})</span>}
+          {renderAutoOut()}
+        </span>
+      );
     case 'present':
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
           Present {subLabel && <span className="font-normal opacity-80 text-[10px]">({subLabel})</span>}
+          {renderAutoOut()}
         </span>
       );
     case 'absent':
@@ -37,6 +47,7 @@ export const AttendanceStatusBadge: React.FC<Props> = ({ status, subLabel, misse
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
           Half Day {subLabel && <span className="font-normal opacity-80 text-[10px]">({subLabel})</span>}
+          {renderAutoOut()}
         </span>
       );
     case 'permission':
@@ -44,13 +55,7 @@ export const AttendanceStatusBadge: React.FC<Props> = ({ status, subLabel, misse
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
           <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
           Permission {subLabel && <span className="font-normal opacity-80 text-[10px]">({subLabel})</span>}
-        </span>
-      );
-    case 'wfh':
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200">
-          <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
-          WFH {subLabel && <span className="font-normal opacity-80 text-[10px]">({subLabel})</span>}
+          {renderAutoOut()}
         </span>
       );
     case 'holiday':

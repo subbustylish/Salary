@@ -147,11 +147,26 @@ export function subscribeToAuditLogs(onData: (logs: AuditLog[]) => void) {
   );
 }
 
+// Utility to sanitize payload objects and strip undefined properties for Firestore
+function cleanForFirestore<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        result[key] = cleanForFirestore(value);
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+  return result;
+}
+
 // User CRUD
 export async function fsSaveUser(user: User): Promise<void> {
   const path = `${USERS_COL}/${user.id}`;
   try {
-    await setDoc(doc(db, USERS_COL, user.id), user);
+    await setDoc(doc(db, USERS_COL, user.id), cleanForFirestore(user));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -160,7 +175,7 @@ export async function fsSaveUser(user: User): Promise<void> {
 export async function fsUpdateUser(id: string, updates: Partial<User>): Promise<void> {
   const path = `${USERS_COL}/${id}`;
   try {
-    await updateDoc(doc(db, USERS_COL, id), updates);
+    await updateDoc(doc(db, USERS_COL, id), cleanForFirestore(updates));
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -179,7 +194,7 @@ export async function fsDeleteUser(id: string): Promise<void> {
 export async function fsSaveAttendanceRecord(record: AttendanceRecord): Promise<void> {
   const path = `${ATTENDANCE_COL}/${record.id}`;
   try {
-    await setDoc(doc(db, ATTENDANCE_COL, record.id), record);
+    await setDoc(doc(db, ATTENDANCE_COL, record.id), cleanForFirestore(record));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -189,7 +204,7 @@ export async function fsSaveAttendanceRecord(record: AttendanceRecord): Promise<
 export async function fsSaveException(exception: AttendanceException): Promise<void> {
   const path = `${EXCEPTIONS_COL}/${exception.id}`;
   try {
-    await setDoc(doc(db, EXCEPTIONS_COL, exception.id), exception);
+    await setDoc(doc(db, EXCEPTIONS_COL, exception.id), cleanForFirestore(exception));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -208,7 +223,7 @@ export async function fsDeleteException(id: string): Promise<void> {
 export async function fsSaveHoliday(holiday: Holiday): Promise<void> {
   const path = `${HOLIDAYS_COL}/${holiday.id}`;
   try {
-    await setDoc(doc(db, HOLIDAYS_COL, holiday.id), holiday);
+    await setDoc(doc(db, HOLIDAYS_COL, holiday.id), cleanForFirestore(holiday));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -217,7 +232,7 @@ export async function fsSaveHoliday(holiday: Holiday): Promise<void> {
 export async function fsUpdateHoliday(id: string, updates: Partial<Holiday>): Promise<void> {
   const path = `${HOLIDAYS_COL}/${id}`;
   try {
-    await updateDoc(doc(db, HOLIDAYS_COL, id), updates);
+    await updateDoc(doc(db, HOLIDAYS_COL, id), cleanForFirestore(updates));
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -236,7 +251,7 @@ export async function fsDeleteHoliday(id: string): Promise<void> {
 export async function fsSaveAuditLog(log: AuditLog): Promise<void> {
   const path = `${AUDIT_LOGS_COL}/${log.id}`;
   try {
-    await setDoc(doc(db, AUDIT_LOGS_COL, log.id), log);
+    await setDoc(doc(db, AUDIT_LOGS_COL, log.id), cleanForFirestore(log));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -260,7 +275,7 @@ export function subscribeToNotificationSettings(onData: (settings: NotificationS
 export async function fsSaveNotificationSettings(settings: NotificationSettings): Promise<void> {
   const path = `${SETTINGS_COL}/${NOTIFICATION_DOC_ID}`;
   try {
-    await setDoc(doc(db, SETTINGS_COL, NOTIFICATION_DOC_ID), settings);
+    await setDoc(doc(db, SETTINGS_COL, NOTIFICATION_DOC_ID), cleanForFirestore(settings));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }

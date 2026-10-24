@@ -102,6 +102,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Real-time dynamic date synced with current calendar day
   const [todayDateStr, setTodayDateStr] = useState<string>(() => formatDateToYYYYMMDD(new Date()));
   const [isFirestoreConnected, setIsFirestoreConnected] = useState<boolean>(false);
+  const [hasLoadedInitialAttendance, setHasLoadedInitialAttendance] = useState<boolean>(false);
 
   useEffect(() => {
     // Keep todayDateStr synchronized with real local date
@@ -228,6 +229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         unsubscribeAttendance = subscribeToAttendance(remoteAttendance => {
           setAttendanceRecords(remoteAttendance);
+          setHasLoadedInitialAttendance(true);
         });
 
         unsubscribeExceptions = subscribeToExceptions(remoteExceptions => {
@@ -266,13 +268,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // Auto-logoff logic: Only applies to past unclosed work days if an employee forgot to logout before midnight
-  const checkAutoLogoff = (records: AttendanceRecord[]): AttendanceRecord[] => {
-    return records.map(r => {
+  // CRITICAL: Checks audit logs first to prevent overwriting genuine punch-outs if a network race occurred
+  const checkAutoLogoff = (records: AttendanceRecord[], logs: AuditLog[], currentUsers: User[]): AttendanceRecord[] => {
+    if (!hasLoadedInitialAttendance || records.length === 0) return records;
+
+    let hasChanges = false;
+    const updated = records.map(r => {
       // Strictly only past calendar dates that have a login punch but never recorded a logout
       if (r.login_time && !r.logout_time && r.date < todayDateStr) {
+        // First check audit logs: did employee punch out, but record in DB was lost or unclosed?
+        const emp = currentUsers.find(u => u.id === r.employee_id);
+        const empName = emp?.name?.toLowerCase() || '';
+        const matchingLogoutLog = logs.find(
+          l =>
+            l.action === 'EMPLOYEE_LOGOUT' &&
+            l.timestamp.startsWith(r.date) &&
+            (empName ? l.user_name.toLowerCase().includes(empName) || l.details.toLowerCase().includes(empName) : false)
+        );
+
+        if (matchingLogoutLog) {
+          // Extract punch-out from log new_value or details
+          const outMatch = matchingLogoutLog.new_value?.match(/Out:\s*([^\s]+)/) || matchingLogoutLog.details?.match(/Out:\s*([^\s]+)/);
+          const recoveredLogout = outMatch ? outMatch[1] : matchingLogoutLog.timestamp;
+          const loginDate = new Date(r.login_time);
+          const recoveredOutDate = new Date(recoveredLogout);
+          const diffMinutes = Math.max(1, Math.round((recoveredOutDate.getTime() - loginDate.getTime()) / (1000 * 60)));
+
+          hasChanges = true;
+          const restoredRec: AttendanceRecord = {
+            ...r,
+            logout_time: recoveredLogout,
+            total_working_minutes: diffMinutes,
+            missed_logout: false,
+            notes: 'Restored verified punch-out from audit log',
+            updated_at: new Date().toISOString()
+          };
+          fsSaveAttendanceRecord(restoredRec).catch(console.error);
+          return restoredRec;
+        }
+
+        // No verified punch-out log found: apply 6:30 PM auto logoff (18:30 IST is 13:00 UTC)
         const [year, month, day] = r.date.split('-').map(Number);
-        // Create 6:30 PM local time for that date
-        const autoLogoutDate = new Date(year, month - 1, day, 18, 30, 0);
+        const autoLogoutDate = new Date(Date.UTC(year, month - 1, day, 13, 0, 0));
         const autoLogoutTimestamp = autoLogoutDate.toISOString();
         const loginDate = new Date(r.login_time);
         let diffMinutes = Math.round((autoLogoutDate.getTime() - loginDate.getTime()) / (1000 * 60));
@@ -280,6 +317,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           diffMinutes = 540; // 9 hours standard working shift
         }
 
+        hasChanges = true;
         const updatedRec: AttendanceRecord = {
           ...r,
           logout_time: autoLogoutTimestamp,
@@ -293,16 +331,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return r;
     });
+
+    return hasChanges ? updated : records;
   };
 
-  // Run auto logoff check on mount & periodically
+  // Run auto logoff check ONLY after initial Firestore attendance has loaded and periodically
   useEffect(() => {
-    setAttendanceRecords(prev => checkAutoLogoff(prev));
+    if (!hasLoadedInitialAttendance) return;
+    setAttendanceRecords(prev => checkAutoLogoff(prev, auditLogs, users));
     const interval = setInterval(() => {
-      setAttendanceRecords(prev => checkAutoLogoff(prev));
-    }, 30000);
+      setAttendanceRecords(prev => checkAutoLogoff(prev, auditLogs, users));
+    }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [hasLoadedInitialAttendance, auditLogs, users]);
 
   // Sync to localStorage as offline cache
   useEffect(() => {
@@ -835,6 +876,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedRec: AttendanceRecord = {
         ...existing,
         status: type,
+        missed_logout: type === 'wfh' ? false : existing.missed_logout,
+        notes: reason.trim() || `Approved ${type.toUpperCase()}`,
         total_working_minutes: existing.total_working_minutes > 0 ? existing.total_working_minutes : minutes,
         updated_at: new Date().toISOString()
       };
@@ -849,6 +892,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout_time: null,
         total_working_minutes: minutes,
         status: type,
+        missed_logout: false,
+        notes: reason.trim() || `Approved ${type.toUpperCase()}`,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };

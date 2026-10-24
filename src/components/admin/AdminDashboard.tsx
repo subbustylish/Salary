@@ -44,25 +44,6 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
   const todayRecords = attendanceRecords.filter(r => r.date === todayDateStr);
   const todayExceptions = exceptions.filter(e => e.date === todayDateStr);
 
-  const presentToday = todayRecords.filter(r => r.status === 'present').length;
-  const absentToday = todayRecords.filter(r => r.status === 'absent').length +
-    todayExceptions.filter(e => e.type === 'absent').length;
-  const halfDayToday = todayRecords.filter(r => r.status === 'half_day').length +
-    todayExceptions.filter(e => e.type === 'half_day').length;
-  const permissionToday = todayRecords.filter(r => r.status === 'permission').length +
-    todayExceptions.filter(e => e.type === 'permission').length;
-  const wfhToday = todayRecords.filter(r => r.status === 'wfh').length +
-    todayExceptions.filter(e => e.type === 'wfh').length;
-
-  const totalWorkingMinutesToday = todayRecords.reduce(
-    (acc, r) => acc + (r.total_working_minutes || 0),
-    0
-  );
-
-  const [selectedDashboardFilter, setSelectedDashboardFilter] = useState<
-    'staff' | 'present' | 'absent' | 'half_day' | 'permission' | 'wfh' | null
-  >(null);
-
   // Group today's employee details by status
   const todayEmployeeDetails = React.useMemo(() => {
     return users.map(u => {
@@ -77,7 +58,15 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
       }
 
       let status: 'present' | 'absent' | 'half_day' | 'permission' | 'wfh' | 'not_marked' = 'not_marked';
-      if (record?.status) {
+      if (exception?.type === 'wfh' || record?.status === 'wfh') {
+        status = 'wfh';
+      } else if (exception?.type === 'permission' || record?.status === 'permission') {
+        status = 'permission';
+      } else if (exception?.type === 'half_day' || record?.status === 'half_day') {
+        status = 'half_day';
+      } else if (exception?.type === 'absent' || record?.status === 'absent') {
+        status = 'absent';
+      } else if (record?.status) {
         status = record.status;
       } else if (exception) {
         status = exception.type;
@@ -99,6 +88,21 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
       };
     });
   }, [users, todayRecords, todayExceptions, liveNow]);
+
+  const presentToday = todayEmployeeDetails.filter(d => d.status === 'present').length;
+  const absentToday = todayEmployeeDetails.filter(d => d.status === 'absent').length;
+  const halfDayToday = todayEmployeeDetails.filter(d => d.status === 'half_day').length;
+  const permissionToday = todayEmployeeDetails.filter(d => d.status === 'permission').length;
+  const wfhToday = todayEmployeeDetails.filter(d => d.status === 'wfh').length;
+
+  const totalWorkingMinutesToday = todayRecords.reduce(
+    (acc, r) => acc + (r.total_working_minutes || 0),
+    0
+  );
+
+  const [selectedDashboardFilter, setSelectedDashboardFilter] = useState<
+    'staff' | 'present' | 'absent' | 'half_day' | 'permission' | 'wfh' | null
+  >(null);
 
   const filteredEmployeesForModal = selectedDashboardFilter
     ? todayEmployeeDetails.filter(item => {

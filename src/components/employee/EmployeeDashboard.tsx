@@ -516,56 +516,58 @@ export const EmployeeDashboard: React.FC<Props> = ({ onNavigateTab }) => {
             </div>
           </div>
 
-          {/* Quick simulation controls for review */}
-          <div className="flex items-center gap-1.5 shrink-0 bg-white p-1 rounded-lg border border-blue-200">
-            <span className="text-[10px] text-slate-500 font-medium px-1">Test Window:</span>
-            <button
-              onClick={() => setForceTimeWindow('auto')}
-              className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
-                forceTimeWindow === 'auto' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              Real Clock
-            </button>
-            <button
-              onClick={() => setForceTimeWindow('before_930')}
-              className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
-                forceTimeWindow === 'before_930' ? 'bg-rose-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              Before 9:30 AM (Locked)
-            </button>
-            <button
-              onClick={() => setForceTimeWindow('after_930')}
-              className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
-                forceTimeWindow === 'after_930' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              After 9:30 AM (Active)
-            </button>
-          </div>
+          {/* Quick simulation controls for admin testing */}
+          {currentUser.role === 'admin' && (
+            <div className="flex items-center gap-1.5 shrink-0 bg-white p-1 rounded-lg border border-blue-200">
+              <span className="text-[10px] text-slate-500 font-medium px-1">Test Window:</span>
+              <button
+                onClick={() => setForceTimeWindow('auto')}
+                className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
+                  forceTimeWindow === 'auto' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                Real Clock
+              </button>
+              <button
+                onClick={() => setForceTimeWindow('before_930')}
+                className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
+                  forceTimeWindow === 'before_930' ? 'bg-rose-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                Before 9:30 AM
+              </button>
+              <button
+                onClick={() => setForceTimeWindow('after_930')}
+                className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
+                  forceTimeWindow === 'after_930' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                After 9:30 AM
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* 6:30 PM Auto-Logoff Policy Notice & Test Simulation Trigger (Section 5) */}
+        {/* 6:30 PM Auto-Logoff Policy Notice & Admin Simulation Trigger */}
         <div className="mt-5 p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl flex flex-col md:flex-row md:items-center justify-between text-xs gap-3">
           <div className="flex items-start gap-2.5 text-amber-950">
             <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold block">6:30 PM Auto-Logoff Policy (Missed Logout):</span>
+              <span className="font-bold block">6:30 PM Auto-Logoff Policy:</span>
               <span className="text-[11px] text-amber-800 leading-relaxed block">
                 If an employee misses logging out, once the time crosses 6:30 PM, the system automatically records 6:30 PM as the logoff timestamp and marks the status as <strong>"Missed Logout Time"</strong>.
               </span>
             </div>
           </div>
 
-          {/* Test button to simulate 6:30 PM auto logoff when user is active */}
-          {isLoggedIn && (
+          {/* Test button to simulate 6:30 PM auto logoff (Admin debug only) */}
+          {isLoggedIn && currentUser.role === 'admin' && (
             <button
               onClick={handleSimulateAutoLogoff}
               className="px-3 py-1.5 bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-lg text-xs font-bold transition-colors shrink-0 border border-amber-300"
-              title="Test the 6:30 PM auto logoff rule"
+              title="Test the 6:30 PM auto logoff rule (Admin only)"
             >
-              Simulate 6:30 PM Auto-Logoff
+              Simulate 6:30 PM Auto-Logoff (Admin)
             </button>
           )}
         </div>

@@ -99,17 +99,26 @@ export const CalendarGrid: React.FC<Props> = ({
           } else if (holiday) {
             displayStatus = 'holiday';
             note = holiday.name;
-          } else if (exception) {
-            displayStatus = exception.type;
-            if (exception.type === 'permission' && exception.permission_minutes) {
-              note = `${Math.floor(exception.permission_minutes / 60)}h ${exception.permission_minutes % 60}m`;
-            } else if (exception.reason) {
-              note = exception.reason;
+          } else if (exception || record) {
+            // Prioritize specific statuses: wfh, permission, half_day, absent, present
+            if (exception?.type === 'wfh' || record?.status === 'wfh') {
+              displayStatus = 'wfh';
+            } else if (exception?.type === 'permission' || record?.status === 'permission') {
+              displayStatus = 'permission';
+            } else if (exception?.type === 'half_day' || record?.status === 'half_day') {
+              displayStatus = 'half_day';
+            } else if (exception?.type === 'absent' || record?.status === 'absent') {
+              displayStatus = 'absent';
+            } else if (record?.status === 'present') {
+              displayStatus = 'present';
             }
-          } else if (record) {
-            displayStatus = record.status;
-            if (record.total_working_minutes > 0) {
+
+            if (exception?.type === 'permission' && exception.permission_minutes) {
+              note = `${Math.floor(exception.permission_minutes / 60)}h ${exception.permission_minutes % 60}m`;
+            } else if (record && record.total_working_minutes > 0) {
               note = formatMinutesToDuration(record.total_working_minutes);
+            } else if (exception?.reason) {
+              note = exception.reason;
             }
           }
 
@@ -124,6 +133,8 @@ export const CalendarGrid: React.FC<Props> = ({
                   ? 'bg-indigo-50/30'
                   : isSelected
                   ? 'bg-blue-50/80 ring-2 ring-inset ring-blue-500'
+                  : displayStatus === 'wfh'
+                  ? 'bg-sky-50/30 hover:bg-sky-50/60'
                   : 'hover:bg-slate-50/60'
               } ${onSelectDate ? 'cursor-pointer' : ''}`}
             >
