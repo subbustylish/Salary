@@ -100,8 +100,10 @@ export const CalendarGrid: React.FC<Props> = ({
             displayStatus = 'holiday';
             note = holiday.name;
           } else if (exception || record) {
-            // Prioritize specific statuses: wfh, permission, half_day, absent, present
-            if (exception?.type === 'wfh' || record?.status === 'wfh') {
+            // If record is present with full working hours (>= 420 mins, e.g. after admin adjustment), prioritize present
+            if (record?.status === 'present' && (!exception || record.total_working_minutes >= 420)) {
+              displayStatus = 'present';
+            } else if (exception?.type === 'wfh' || record?.status === 'wfh') {
               displayStatus = 'wfh';
             } else if (exception?.type === 'permission' || record?.status === 'permission') {
               displayStatus = 'permission';

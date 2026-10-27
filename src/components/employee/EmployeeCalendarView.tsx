@@ -97,6 +97,8 @@ export const EmployeeCalendarView: React.FC<{ employeeId?: string }> = ({ employ
               <span className="font-bold text-slate-800 uppercase block">
                 {selectedHoliday
                   ? `Holiday: ${selectedHoliday.name}`
+                  : selectedRecord?.status === 'present' && (!selectedException || selectedRecord.total_working_minutes >= 420)
+                  ? 'Present'
                   : selectedException
                   ? selectedException.type
                   : selectedRecord

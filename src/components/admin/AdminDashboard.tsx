@@ -58,7 +58,9 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
       }
 
       let status: 'present' | 'absent' | 'half_day' | 'permission' | 'wfh' | 'not_marked' = 'not_marked';
-      if (exception?.type === 'wfh' || record?.status === 'wfh') {
+      if (record?.status === 'present' && (!exception || record.total_working_minutes >= 420)) {
+        status = 'present';
+      } else if (exception?.type === 'wfh' || record?.status === 'wfh') {
         status = 'wfh';
       } else if (exception?.type === 'permission' || record?.status === 'permission') {
         status = 'permission';

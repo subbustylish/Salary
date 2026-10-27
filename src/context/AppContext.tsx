@@ -362,6 +362,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.EXCEPTIONS, JSON.stringify(exceptions));
   }, [exceptions]);
 
+  // Auto-reconcile orphan exceptions: If an attendance record is 'present' with full working shift (>= 420 mins),
+  // automatically purge conflicting half_day or absent exceptions for that date so calendar immediately reflects 'Present'
+  useEffect(() => {
+    const conflictingIds: string[] = [];
+    exceptions.forEach(e => {
+      const rec = attendanceRecords.find(r => r.employee_id === e.employee_id && r.date === e.date);
+      if (rec && rec.status === 'present' && rec.total_working_minutes >= 420 && e.type !== 'wfh') {
+        conflictingIds.push(e.id);
+      }
+    });
+
+    if (conflictingIds.length > 0) {
+      setExceptions(prev => prev.filter(e => !conflictingIds.includes(e.id)));
+      conflictingIds.forEach(id => {
+        fsDeleteException(id).catch(console.error);
+      });
+    }
+  }, [attendanceRecords, exceptions]);
+
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.HOLIDAYS, JSON.stringify(holidays));
   }, [holidays]);
@@ -655,6 +674,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAttendanceRecords(prev => prev.map(r => (r.id === recordId ? updatedRec : r)));
     fsSaveAttendanceRecord(updatedRec).catch(console.error);
 
+    // CRITICAL: Synchronize exceptions collection when admin explicitly adjusts an attendance record
+    if (updates.status === 'present') {
+      // If admin marked as present (full day), automatically remove any conflicting exception for this employee on this date
+      const conflicting = exceptions.filter(
+        e => e.employee_id === existing.employee_id && e.date === existing.date
+      );
+      if (conflicting.length > 0) {
+        setExceptions(prev =>
+          prev.filter(e => !(e.employee_id === existing.employee_id && e.date === existing.date))
+        );
+        conflicting.forEach(ce => {
+          fsDeleteException(ce.id).catch(console.error);
+        });
+      }
+    } else if (updates.status) {
+      // If admin marked as half_day, permission, wfh, or absent, sync with exceptions table
+      const matchingExc = exceptions.find(
+        e => e.employee_id === existing.employee_id && e.date === existing.date
+      );
+      if (matchingExc) {
+        const updatedExc: AttendanceException = {
+          ...matchingExc,
+          type: updates.status,
+          reason: updates.notes || matchingExc.reason
+        };
+        setExceptions(prev =>
+          prev.map(e => (e.id === matchingExc.id ? updatedExc : e))
+        );
+        fsSaveException(updatedExc).catch(console.error);
+      }
+    }
+
     const emp = users.find(u => u.id === existing.employee_id);
     addAuditLog(
       'ATTENDANCE_CORRECTED',
@@ -664,7 +715,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       `In: ${updatedRec.login_time} | Out: ${updatedRec.logout_time} | Mins: ${updatedRec.total_working_minutes}`
     );
 
-    return { success: true, message: 'Attendance record updated successfully.' };
+    return { success: true, message: 'Attendance record and exception status updated successfully.' };
   };
 
   const triggerAutoLogoffForTest = (employeeId?: string): { success: boolean; message: string } => {
