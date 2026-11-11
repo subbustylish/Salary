@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { Lock, User, AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react';
 
 export const LoginView: React.FC = () => {
-  const { loginUser, users, isFirestoreConnected } = useApp();
+  const { loginUser, users, isFirestoreConnected, isSyncing } = useApp();
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -14,8 +14,8 @@ export const LoginView: React.FC = () => {
     e.preventDefault();
     setError(null);
 
-    if (users.length === 0 && !isFirestoreConnected) {
-      setError('Connecting to secure cloud database. Please try again in a moment...');
+    if (users.length === 0 && (isSyncing || !isFirestoreConnected)) {
+      setError('Connecting to secure cloud database. Please try again in a few seconds...');
       return;
     }
 

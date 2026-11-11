@@ -21,12 +21,10 @@ import {
   fsUpdateHoliday,
   fsUpdateUser,
   seedInitialDataIfEmpty,
-  subscribeToAttendance,
-  subscribeToAuditLogs,
-  subscribeToExceptions,
-  subscribeToHolidays,
-  subscribeToNotificationSettings,
-  subscribeToUsers
+  fetchCloudDataSnapshot,
+  fetchCloudHolidays,
+  fetchCloudNotificationSettings,
+  sessionDbMetrics
 } from '../lib/firebaseService';
 import {
   AttendanceException,
@@ -51,6 +49,10 @@ interface AppContextType {
   auditLogs: AuditLog[];
   todayDateStr: string;
   isFirestoreConnected: boolean;
+  isSyncing: boolean;
+  lastSyncTime: string | null;
+  sessionDbHits: { reads: number; writes: number; deletes: number };
+  syncDataFromCloud: (force?: boolean) => Promise<{ success: boolean; message: string; readCount?: number }>;
   notificationSettings: NotificationSettings;
   loginUser: (identifier: string, password?: string) => boolean;
   logoutCurrentUser: () => void;
@@ -93,7 +95,8 @@ const STORAGE_KEYS = {
   HOLIDAYS: 'zt_salary_holidays_v3',
   LOGS: 'zt_salary_audit_logs_v3',
   SETTINGS: 'zt_salary_notification_settings_v3',
-  CURRENT_USER: 'zt_salary_current_user_v3'
+  CURRENT_USER: 'zt_salary_current_user_v3',
+  LAST_SYNC: 'zt_salary_last_sync_v3'
 };
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -205,65 +208,92 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  // Setup Firestore Real-time Listeners and Seeding on Mount
-  useEffect(() => {
-    let unsubscribeUsers: (() => void) | null = null;
-    let unsubscribeAttendance: (() => void) | null = null;
-    let unsubscribeExceptions: (() => void) | null = null;
-    let unsubscribeHolidays: (() => void) | null = null;
-    let unsubscribeAuditLogs: (() => void) | null = null;
-    let unsubscribeSettings: (() => void) | null = null;
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.LAST_SYNC);
+    } catch {
+      return null;
+    }
+  });
+  const [sessionDbHits, setSessionDbHits] = useState<{ reads: number; writes: number; deletes: number }>({
+    reads: sessionDbMetrics.reads,
+    writes: sessionDbMetrics.writes,
+    deletes: sessionDbMetrics.deletes
+  });
 
-    const initFirebaseSync = async () => {
+  // Targeted one-shot Cloud Sync: pulls users, attendance, and exceptions on demand
+  const syncDataFromCloud = async (force: boolean = false): Promise<{ success: boolean; message: string; readCount?: number }> => {
+    if (isSyncing) return { success: false, message: 'Sync already in progress.' };
+    setIsSyncing(true);
+    try {
+      const snapshot = await fetchCloudDataSnapshot();
+      setUsers(snapshot.users);
+      setAttendanceRecords(snapshot.attendance);
+      setExceptions(snapshot.exceptions);
+      setHasLoadedInitialAttendance(true);
+      setIsFirestoreConnected(true);
+
+      // Keep current user updated
+      setCurrentUser(prev => {
+        if (!prev) return null;
+        return snapshot.users.find(u => u.id === prev.id) || prev;
+      });
+
+      const nowIso = new Date().toISOString();
+      setLastSyncTime(nowIso);
+      localStorage.setItem(STORAGE_KEYS.LAST_SYNC, nowIso);
+      setSessionDbHits({ ...sessionDbMetrics });
+
+      const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      return {
+        success: true,
+        message: `Cloud synchronized (${snapshot.readCount} records fetched at ${nowTimeStr}).`,
+        readCount: snapshot.readCount
+      };
+    } catch (err: any) {
+      console.warn('Sync notice:', err);
+      setIsFirestoreConnected(false);
+      return {
+        success: false,
+        message: err?.message || 'Could not connect to cloud database, running in offline mode.'
+      };
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Spark Low-Call Optimization: Fetch on app start only if localStorage is empty or last sync > 60 mins
+  useEffect(() => {
+    let isMounted = true;
+    const initializeData = async () => {
       try {
         await seedInitialDataIfEmpty();
-        setIsFirestoreConnected(true);
 
-        unsubscribeUsers = subscribeToUsers(remoteUsers => {
-          setUsers(remoteUsers);
-          setCurrentUser(prev => {
-            if (!prev) return null;
-            return remoteUsers.find(u => u.id === prev.id) || prev;
-          });
-        });
+        const storedSync = localStorage.getItem(STORAGE_KEYS.LAST_SYNC);
+        const lastSyncMs = storedSync ? new Date(storedSync).getTime() : 0;
+        const now = Date.now();
+        const minutesSinceLastSync = (now - lastSyncMs) / (1000 * 60);
 
-        unsubscribeAttendance = subscribeToAttendance(remoteAttendance => {
-          setAttendanceRecords(remoteAttendance);
-          setHasLoadedInitialAttendance(true);
-        });
-
-        unsubscribeExceptions = subscribeToExceptions(remoteExceptions => {
-          setExceptions(remoteExceptions);
-        });
-
-        unsubscribeHolidays = subscribeToHolidays(remoteHolidays => {
-          setHolidays(remoteHolidays);
-        });
-
-        unsubscribeAuditLogs = subscribeToAuditLogs(remoteLogs => {
-          setAuditLogs(remoteLogs);
-        });
-
-        unsubscribeSettings = subscribeToNotificationSettings(remoteSettings => {
-          if (remoteSettings) {
-            setNotificationSettings(remoteSettings);
-            localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(remoteSettings));
+        // Cold start or stale cache (>60 mins): do a single one-shot read
+        if (users.length === 0 || !storedSync || minutesSinceLastSync > 60) {
+          if (isMounted) {
+            await syncDataFromCloud(false);
           }
-        });
+        } else {
+          setIsFirestoreConnected(true);
+          setHasLoadedInitialAttendance(true);
+          setSessionDbHits({ ...sessionDbMetrics });
+        }
       } catch (err) {
-        console.error('Firestore real-time sync initialization warning:', err);
+        console.warn('Startup sync notice:', err);
+        setIsFirestoreConnected(false);
       }
     };
 
-    initFirebaseSync();
-
+    initializeData();
     return () => {
-      if (unsubscribeUsers) unsubscribeUsers();
-      if (unsubscribeAttendance) unsubscribeAttendance();
-      if (unsubscribeExceptions) unsubscribeExceptions();
-      if (unsubscribeHolidays) unsubscribeHolidays();
-      if (unsubscribeAuditLogs) unsubscribeAuditLogs();
-      if (unsubscribeSettings) unsubscribeSettings();
+      isMounted = false;
     };
   }, []);
 
@@ -1390,6 +1420,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         auditLogs,
         todayDateStr,
         isFirestoreConnected,
+        isSyncing,
+        lastSyncTime,
+        sessionDbHits,
+        syncDataFromCloud,
         loginUser,
         logoutCurrentUser,
         switchUser,
