@@ -5,7 +5,7 @@ import {
   LogOut,
   Menu,
   RefreshCw,
-  Database,
+  ShieldAlert,
   CheckCircle2
 } from 'lucide-react';
 
@@ -20,7 +20,7 @@ export const Header: React.FC<Props> = ({ onToggleMobileNav }) => {
     isFirestoreConnected,
     isSyncing,
     lastSyncTime,
-    sessionDbHits,
+    isQuotaLocked,
     syncDataFromCloud
   } = useApp();
 
@@ -119,21 +119,33 @@ export const Header: React.FC<Props> = ({ onToggleMobileNav }) => {
           <div className="relative">
             <button
               onClick={handleManualSync}
-              disabled={isSyncing}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
-                isSyncing
+              disabled={isSyncing || isQuotaLocked}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                isQuotaLocked
+                  ? 'bg-rose-50 border-rose-200 text-rose-700 cursor-not-allowed'
+                  : isSyncing
                   ? 'bg-amber-50 border-amber-300 text-amber-800 cursor-wait'
-                  : 'bg-emerald-50/80 border-emerald-200 text-emerald-800 hover:bg-emerald-100 hover:border-emerald-300'
+                  : 'bg-emerald-50/80 border-emerald-200 text-emerald-800 hover:bg-emerald-100 hover:border-emerald-300 cursor-pointer'
               }`}
-              title={`Database Synced. Last synchronized at ${formatLastSync(lastSyncTime)}.`}
+              title={
+                isQuotaLocked
+                  ? 'Daily 50K limit reached — paused until midnight PT'
+                  : `Database Synced. Last synchronized at ${formatLastSync(lastSyncTime)}.`
+              }
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
+              {isQuotaLocked ? (
+                <ShieldAlert className="w-3.5 h-3.5 text-rose-600" />
+              ) : (
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
+              )}
               <span className="hidden sm:inline">
-                {isSyncing ? 'Syncing...' : 'Sync DB'}
+                {isQuotaLocked ? 'Sync Paused' : isSyncing ? 'Syncing...' : 'Sync DB'}
               </span>
-              <span className="text-[10px] px-1 py-0.2 bg-white/80 rounded border border-emerald-200 font-mono text-emerald-700 hidden md:inline">
-                {formatLastSync(lastSyncTime)}
-              </span>
+              {!isQuotaLocked && (
+                <span className="text-[10px] px-1 py-0.2 bg-white/80 rounded border border-emerald-200 font-mono text-emerald-700 hidden md:inline">
+                  {formatLastSync(lastSyncTime)}
+                </span>
+              )}
             </button>
 
             {/* Quick transient feedback toast */}

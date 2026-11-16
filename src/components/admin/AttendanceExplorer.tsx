@@ -31,9 +31,10 @@ function constructIsoWithTime(dateStr: string, timeHHMM: string): string {
   return d.toISOString();
 }
 
-export const AttendanceExplorer: React.FC<{ initialEmployeeId?: string }> = ({
-  initialEmployeeId
-}) => {
+export const AttendanceExplorer: React.FC<{
+  initialEmployeeId?: string;
+  initialDate?: string;
+}> = ({ initialEmployeeId, initialDate }) => {
   const { users, attendanceRecords, exceptions, holidays, todayDateStr, updateAttendanceRecord } = useApp();
 
   const currentYearNow = new Date().getFullYear();
@@ -65,6 +66,20 @@ export const AttendanceExplorer: React.FC<{ initialEmployeeId?: string }> = ({
       }
     }
   }, [initialEmployeeId, users, selectedUserId]);
+
+  useEffect(() => {
+    if (initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate)) {
+      const [yStr, mStr] = initialDate.split('-');
+      const y = parseInt(yStr, 10);
+      const m = parseInt(mStr, 10);
+      if (!isNaN(y) && !isNaN(m)) {
+        setSelectedYear(y);
+        setSelectedMonth(m);
+        setInspectedDate(initialDate);
+        setViewMode('calendar');
+      }
+    }
+  }, [initialDate]);
 
   const selectedUser = users.find(u => u.id === selectedUserId) || users[0];
 
@@ -168,6 +183,59 @@ export const AttendanceExplorer: React.FC<{ initialEmployeeId?: string }> = ({
         .sort((a, b) => b.date.localeCompare(a.date))
     : [];
 
+  const mergedTableRows = React.useMemo(() => {
+    if (!selectedUser) return [];
+    const empExcs = exceptions.filter(
+      e => e.employee_id === selectedUser.id && e.date.startsWith(monthPrefix)
+    );
+    const recMap = new Map(records.map(r => [r.date, r]));
+    const excMap = new Map(empExcs.map(e => [e.date, e]));
+    const allDates = Array.from(new Set([...recMap.keys(), ...excMap.keys()])).sort((a, b) =>
+      b.localeCompare(a)
+    );
+
+    return allDates.map(date => {
+      const rec = recMap.get(date);
+      const exc = excMap.get(date);
+
+      let effectiveStatus: AttendanceStatus = 'present';
+      if (exc?.type === 'wfh' || rec?.status === 'wfh') {
+        effectiveStatus = 'wfh';
+      } else if (rec?.status === 'present' && (!exc || rec.total_working_minutes >= 420)) {
+        effectiveStatus = 'present';
+      } else if (exc) {
+        effectiveStatus = exc.type;
+      } else if (rec) {
+        effectiveStatus = rec.status;
+      }
+
+      const totalMinutes =
+        effectiveStatus === 'absent'
+          ? 0
+          : rec && rec.total_working_minutes > 0
+          ? rec.total_working_minutes
+          : exc?.type === 'wfh'
+          ? 480
+          : exc?.type === 'half_day'
+          ? 240
+          : exc?.type === 'permission'
+          ? 300
+          : 0;
+
+      return {
+        key: rec?.id || exc?.id || date,
+        date,
+        record: rec,
+        exception: exc,
+        effectiveStatus,
+        loginTime: effectiveStatus === 'absent' ? null : rec?.login_time || null,
+        logoutTime: effectiveStatus === 'absent' ? null : rec?.logout_time || null,
+        totalMinutes,
+        missedLogout: effectiveStatus === 'absent' ? false : rec?.missed_logout || false
+      };
+    });
+  }, [selectedUser, records, exceptions, monthPrefix]);
+
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<
     'present' | 'absent' | 'half_day' | 'permission' | 'wfh' | 'holiday' | null
   >(null);
@@ -190,7 +258,9 @@ export const AttendanceExplorer: React.FC<{ initialEmployeeId?: string }> = ({
     const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate();
     const empRecordsMap = new Map(records.map(r => [r.date, r]));
     const empExceptionsMap = new Map(
-      exceptions.filter(e => e.employee_id === selectedUser.id && e.date.startsWith(monthPrefix)).map(e => [e.date, e])
+      exceptions
+        .filter(e => e.employee_id === selectedUser?.id && e.date.startsWith(monthPrefix))
+        .map(e => [e.date, e])
     );
     const holidayMap = new Map(holidays.map(h => [h.date, h]));
 
@@ -244,7 +314,7 @@ export const AttendanceExplorer: React.FC<{ initialEmployeeId?: string }> = ({
     }
 
     return list;
-  }, [selectedYear, selectedMonth, monthPrefix, records, exceptions, holidays, selectedUser.id]);
+  }, [selectedYear, selectedMonth, monthPrefix, records, exceptions, holidays, selectedUser?.id]);
 
   const filteredStatusDays = selectedStatusFilter
     ? statusDetails.filter(d => d.status === selectedStatusFilter)
@@ -620,6 +690,8 @@ export const AttendanceExplorer: React.FC<{ initialEmployeeId?: string }> = ({
                     <span className="font-bold text-slate-800 uppercase block">
                       {dayHoliday
                         ? `Holiday: ${dayHoliday.name}`
+                        : dayException?.type === 'wfh' || dayRecord?.status === 'wfh'
+                        ? `WFH (${dayException?.approval_status || 'approved'})`
                         : dayException
                         ? `${dayException.type} (${dayException.approval_status})`
                         : dayRecord
@@ -698,60 +770,73 @@ export const AttendanceExplorer: React.FC<{ initialEmployeeId?: string }> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {records.length === 0 ? (
+                {mergedTableRows.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-8 text-center text-slate-400">
-                      No punch records found for this employee in {MONTH_NAMES[selectedMonth - 1]} {selectedYear}.
+                      No punch or exception records found for this employee in {MONTH_NAMES[selectedMonth - 1]} {selectedYear}.
                     </td>
                   </tr>
                 ) : (
-                  records.map(r => (
-                    <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
+                  mergedTableRows.map(row => (
+                    <tr key={row.key} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-3 px-4 font-mono font-semibold text-slate-800">
-                        {r.date}
+                        {row.date}
                       </td>
                       <td className="py-3 px-4 font-mono text-slate-700">
-                        {r.status === 'absent' ? (
+                        {row.effectiveStatus === 'absent' ? (
                           <span className="text-slate-400 font-sans italic text-[11px]">No punch</span>
                         ) : (
-                          formatTime(r.login_time)
+                          formatTime(row.loginTime)
                         )}
                       </td>
                       <td className="py-3 px-4 font-mono text-slate-700">
-                        {r.status === 'absent' ? (
+                        {row.effectiveStatus === 'absent' ? (
                           <span className="text-slate-400 font-sans italic text-[11px]">No punch</span>
-                        ) : r.missed_logout ? (
+                        ) : row.missedLogout ? (
                           <span className="text-amber-700 font-semibold font-mono">
-                            {formatTime(r.logout_time)} (Auto)
+                            {formatTime(row.logoutTime)} (Auto)
                           </span>
                         ) : (
-                          formatTime(r.logout_time)
+                          formatTime(row.logoutTime)
                         )}
                       </td>
                       <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                        {r.status === 'absent' ? '0h 0m' : formatMinutesToDuration(r.total_working_minutes)}
+                        {row.effectiveStatus === 'absent' ? '0h 0m' : formatMinutesToDuration(row.totalMinutes)}
                       </td>
                       <td className="py-3 px-4">
                         <AttendanceStatusBadge
-                          status={r.status}
-                          missedLogout={r.missed_logout}
+                          status={row.effectiveStatus}
+                          subLabel={row.exception?.leave_type}
+                          missedLogout={row.missedLogout}
                         />
                       </td>
                       <td className="py-3 px-4">
                         <WorkingHoursBadge
-                          minutes={r.total_working_minutes}
-                          isActive={r.date === todayDateStr && !r.logout_time && !!r.login_time}
-                          isMissedLogout={r.missed_logout}
+                          minutes={row.totalMinutes}
+                          isActive={row.date === todayDateStr && !row.logoutTime && !!row.loginTime}
+                          isMissedLogout={row.missedLogout}
                         />
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <button
-                          onClick={() => openEditModal(r)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 transition-colors cursor-pointer"
-                        >
-                          <Edit2 className="w-3 h-3 text-slate-600" />
-                          Adjust Times
-                        </button>
+                        {row.record ? (
+                          <button
+                            onClick={() => openEditModal(row.record!)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 transition-colors cursor-pointer"
+                          >
+                            <Edit2 className="w-3 h-3 text-slate-600" />
+                            Adjust Times
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setInspectedDate(row.date);
+                              setViewMode('calendar');
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-sky-50 hover:bg-sky-100 text-sky-700 transition-colors cursor-pointer"
+                          >
+                            View in Calendar
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))

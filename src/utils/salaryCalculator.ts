@@ -63,6 +63,11 @@ export function calculateEmployeeSalaryForMonth(
     const record = recordMap.get(dateStr);
     const exception = exceptionMap.get(dateStr);
 
+    if (exception?.type === 'wfh' || record?.status === 'wfh') {
+      wfhDays++;
+      continue;
+    }
+
     // If an attendance record is marked as full-day present (>= 420 mins, e.g. after admin adjustment), prioritize present
     if (record && record.status === 'present' && (!exception || record.total_working_minutes >= 420)) {
       presentDays++;

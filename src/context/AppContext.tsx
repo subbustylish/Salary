@@ -22,10 +22,15 @@ import {
   fsUpdateUser,
   seedInitialDataIfEmpty,
   fetchCloudDataSnapshot,
-  fetchCloudHolidays,
-  fetchCloudNotificationSettings,
   sessionDbMetrics
 } from '../lib/firebaseService';
+import {
+  getCircuitBreakerState,
+  isCircuitBreakerLocked,
+  QuotaCircuitBreakerError,
+  subscribeToCircuitBreaker,
+  SyncQuotaState
+} from '../lib/circuitBreaker';
 import {
   AttendanceException,
   AttendanceRecord,
@@ -52,6 +57,8 @@ interface AppContextType {
   isSyncing: boolean;
   lastSyncTime: string | null;
   sessionDbHits: { reads: number; writes: number; deletes: number };
+  quotaState: SyncQuotaState;
+  isQuotaLocked: boolean;
   syncDataFromCloud: (force?: boolean) => Promise<{ success: boolean; message: string; readCount?: number }>;
   notificationSettings: NotificationSettings;
   loginUser: (identifier: string, password?: string) => boolean;
@@ -221,16 +228,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     writes: sessionDbMetrics.writes,
     deletes: sessionDbMetrics.deletes
   });
+  const [quotaState, setQuotaState] = useState<SyncQuotaState>(() => getCircuitBreakerState());
+  const isQuotaLocked = quotaState.locked;
+
+  useEffect(() => {
+    const unsubscribe = subscribeToCircuitBreaker(nextState => {
+      setQuotaState(nextState);
+    });
+    return unsubscribe;
+  }, []);
+
+  const QUOTA_LOCKED_MSG = 'Daily 50K limit reached — paused until midnight PT. Cloud reads and writes are temporarily disabled.';
 
   // Targeted one-shot Cloud Sync: pulls users, attendance, and exceptions on demand
   const syncDataFromCloud = async (force: boolean = false): Promise<{ success: boolean; message: string; readCount?: number }> => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     if (isSyncing) return { success: false, message: 'Sync already in progress.' };
     setIsSyncing(true);
     try {
-      const snapshot = await fetchCloudDataSnapshot();
+      const snapshot = await fetchCloudDataSnapshot(force);
       setUsers(snapshot.users);
       setAttendanceRecords(snapshot.attendance);
       setExceptions(snapshot.exceptions);
+      if (snapshot.holidays) {
+        setHolidays(snapshot.holidays);
+      }
+      if (snapshot.settings) {
+        setNotificationSettings(snapshot.settings);
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(snapshot.settings));
+      }
       setHasLoadedInitialAttendance(true);
       setIsFirestoreConnected(true);
 
@@ -252,6 +280,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         readCount: snapshot.readCount
       };
     } catch (err: any) {
+      if (err instanceof QuotaCircuitBreakerError) {
+        return { success: false, message: QUOTA_LOCKED_MSG };
+      }
       console.warn('Sync notice:', err);
       setIsFirestoreConnected(false);
       return {
@@ -263,11 +294,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Spark Low-Call Optimization: Fetch on app start only if localStorage is empty or last sync > 60 mins
+  // Fetch on app start only if localStorage is empty or last sync > 60 mins (blocked if 50K circuit breaker active)
   useEffect(() => {
     let isMounted = true;
     const initializeData = async () => {
       try {
+        if (isCircuitBreakerLocked()) {
+          setHasLoadedInitialAttendance(true);
+          return;
+        }
+
         await seedInitialDataIfEmpty();
 
         const storedSync = localStorage.getItem(STORAGE_KEYS.LAST_SYNC);
@@ -275,9 +311,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const now = Date.now();
         const minutesSinceLastSync = (now - lastSyncMs) / (1000 * 60);
 
-        // Cold start or stale cache (>60 mins): do a single one-shot read
-        if (users.length === 0 || !storedSync || minutesSinceLastSync > 60) {
-          if (isMounted) {
+        // Cold start or stale cache (>2 mins): do a single one-shot read
+        if (users.length === 0 || !storedSync || minutesSinceLastSync > 2) {
+          if (isMounted && !isCircuitBreakerLocked()) {
             await syncDataFromCloud(false);
           }
         } else {
@@ -300,7 +336,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Auto-logoff logic: Only applies to past unclosed work days if an employee forgot to logout before midnight
   // CRITICAL: Checks audit logs first to prevent overwriting genuine punch-outs if a network race occurred
   const checkAutoLogoff = (records: AttendanceRecord[], logs: AuditLog[], currentUsers: User[]): AttendanceRecord[] => {
-    if (!hasLoadedInitialAttendance || records.length === 0) return records;
+    if (!hasLoadedInitialAttendance || records.length === 0 || isCircuitBreakerLocked()) return records;
 
     let hasChanges = false;
     const updated = records.map(r => {
@@ -403,7 +439,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    if (conflictingIds.length > 0) {
+    if (conflictingIds.length > 0 && !isCircuitBreakerLocked()) {
       setExceptions(prev => prev.filter(e => !conflictingIds.includes(e.id)));
       conflictingIds.forEach(id => {
         fsDeleteException(id).catch(console.error);
@@ -438,7 +474,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: new Date().toISOString()
     };
     setAuditLogs(prev => [newLog, ...prev]);
-    fsSaveAuditLog(newLog).catch(console.error);
+    if (!isCircuitBreakerLocked()) {
+      fsSaveAuditLog(newLog).catch(console.error);
+    }
   };
 
   const loginUser = (identifier: string, password?: string): boolean => {
@@ -465,6 +503,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setCurrentUser(found);
       addAuditLog('USER_LOGIN', 'auth', `${found.role === 'admin' ? 'Admin' : 'User'} ${found.name} logged in successfully.`);
+
+      // Pull fresh cloud snapshot on login if local cache is older than 1 minute
+      if (!isCircuitBreakerLocked()) {
+        const storedSync = localStorage.getItem(STORAGE_KEYS.LAST_SYNC);
+        const lastSyncMs = storedSync ? new Date(storedSync).getTime() : 0;
+        const minutesSinceLastSync = (Date.now() - lastSyncMs) / (1000 * 60);
+        if (!storedSync || isNaN(minutesSinceLastSync) || minutesSinceLastSync > 1) {
+          syncDataFromCloud(false).catch(console.error);
+        }
+      }
+
       return true;
     }
 
@@ -489,6 +538,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Biometric / Automated system punch login (Activates at 9:30 AM every working day, except Sundays & Holidays)
   const punchLogin = (employeeId?: string, bypassTimeCheck: boolean = false): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const empId = employeeId || (currentUser ? currentUser.id : null);
     if (!empId) {
       return { success: false, message: 'No employee identified for punch-in.' };
@@ -556,11 +608,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Capture system timestamp automatically
     const loginTimestamp = now.toISOString();
 
+    // Preserve WFH status if the employee already submitted WFH for today
+    const hasWfhException = exceptions.some(
+      e => e.employee_id === empId && e.date === todayDateStr && e.type === 'wfh'
+    );
+    const resolvedStatus = existing?.status === 'wfh' || hasWfhException ? 'wfh' : 'present';
+
     if (existing) {
       const updatedRec: AttendanceRecord = {
         ...existing,
         login_time: loginTimestamp,
-        status: 'present',
+        status: resolvedStatus,
         updated_at: loginTimestamp
       };
       setAttendanceRecords(prev =>
@@ -575,7 +633,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login_time: loginTimestamp,
         logout_time: null,
         total_working_minutes: 0,
-        status: 'present',
+        status: resolvedStatus,
         created_at: loginTimestamp,
         updated_at: loginTimestamp
       };
@@ -599,6 +657,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Biometric / Automated system punch logout
   const punchLogout = (employeeId?: string): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const empId = employeeId || (currentUser ? currentUser.id : null);
     if (!empId) {
       return { success: false, message: 'No employee identified for punch-out.' };
@@ -667,6 +728,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     recordId: string,
     updates: Partial<AttendanceRecord>
   ): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const existing = attendanceRecords.find(r => r.id === recordId);
     if (!existing) {
       return { success: false, message: 'Attendance record not found.' };
@@ -749,6 +813,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const triggerAutoLogoffForTest = (employeeId?: string): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const empId = employeeId || (currentUser ? currentUser.id : null);
     if (!empId) return { success: false, message: 'No employee identified for auto-logoff.' };
 
@@ -836,6 +903,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     casualQuota: number,
     sickQuota: number
   ): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const employee = users.find(u => u.id === employeeId);
     if (!employee) return { success: false, message: 'Employee not found.' };
 
@@ -874,6 +944,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reason: string;
     permission_minutes?: number;
   }): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const { employee_id, date, type, leave_type, reason, permission_minutes } = data;
 
     if (!reason.trim()) {
@@ -946,6 +1019,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString()
     };
 
+    // Remove any superseded same-date exceptions in Firestore so stale records cannot resurface on sync
+    const supersededExceptions = exceptions.filter(
+      e => e.employee_id === employee_id && e.date === date
+    );
+    supersededExceptions.forEach(oldExc => {
+      fsDeleteException(oldExc.id).catch(console.error);
+    });
+
     setExceptions(prev => [newException, ...prev.filter(e => !(e.employee_id === employee_id && e.date === date))]);
     fsSaveException(newException).catch(console.error);
 
@@ -1001,6 +1082,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Delete attendance exception (e.g. if employee submitted wrongly, admin deletes during salary calculation)
   const deleteAttendanceException = (exceptionId: string): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const targetExc = exceptions.find(e => e.id === exceptionId);
     if (!targetExc) {
       return { success: false, message: 'Exception record not found.' };
@@ -1062,6 +1146,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateNotificationSettings = (
     newSettings: NotificationSettings
   ): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     setNotificationSettings(newSettings);
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(newSettings));
     fsSaveNotificationSettings(newSettings).catch(console.error);
@@ -1080,6 +1167,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addNotificationContact = (
     contactData: Omit<NotificationContact, 'id' | 'created_at'>
   ): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const newContact: NotificationContact = {
       ...contactData,
       id: `contact-${Date.now()}`,
@@ -1120,6 +1210,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     id: string,
     updates: Partial<Omit<NotificationContact, 'id' | 'created_at'>>
   ): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const existing =
       notificationSettings.emails.find(c => c.id === id) ||
       notificationSettings.mobiles.find(c => c.id === id);
@@ -1150,6 +1243,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteNotificationContact = (id: string): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const contactToDelete =
       notificationSettings.emails.find(c => c.id === id) ||
       notificationSettings.mobiles.find(c => c.id === id);
@@ -1178,6 +1274,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addEmployee = (employeeData: Omit<User, 'id' | 'created_at'>): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     // Check duplicate username or ID
     const exists = users.find(
       u => u.username.toLowerCase() === employeeData.username.toLowerCase() ||
@@ -1212,6 +1311,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateEmployee = (id: string, updates: Partial<User>): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const existing = users.find(u => u.id === id);
     if (!existing) {
       return { success: false, message: 'Employee not found.' };
@@ -1283,6 +1385,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleEmployeeStatus = (id: string) => {
+    if (isCircuitBreakerLocked()) return;
     const existing = users.find(u => u.id === id);
     if (!existing) return;
     const newStatus = existing.status === 'active' ? 'inactive' : 'active';
@@ -1299,6 +1402,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteEmployee = (id: string): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const existing = users.find(u => u.id === id);
     if (!existing) {
       return { success: false, message: 'Employee not found.' };
@@ -1329,6 +1435,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addHoliday = (holidayData: Omit<Holiday, 'id' | 'created_at'>): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const exists = holidays.find(h => h.date === holidayData.date);
     if (exists) {
       return { success: false, message: `A holiday is already configured for ${holidayData.date}: ${exists.name}` };
@@ -1355,6 +1464,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateHoliday = (id: string, updates: Partial<Holiday>): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const existing = holidays.find(h => h.id === id);
     if (!existing) return { success: false, message: 'Holiday not found.' };
 
@@ -1373,6 +1485,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteHoliday = (id: string): { success: boolean; message: string } => {
+    if (isCircuitBreakerLocked()) {
+      return { success: false, message: QUOTA_LOCKED_MSG };
+    }
     const existing = holidays.find(h => h.id === id);
     if (!existing) return { success: false, message: 'Holiday not found.' };
 
@@ -1423,6 +1538,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isSyncing,
         lastSyncTime,
         sessionDbHits,
+        quotaState,
+        isQuotaLocked,
         syncDataFromCloud,
         loginUser,
         logoutCurrentUser,

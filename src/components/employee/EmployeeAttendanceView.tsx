@@ -6,7 +6,7 @@ import { WorkingHoursBadge } from '../common/WorkingHoursBadge';
 import { Clock, Filter, Calendar, Search } from 'lucide-react';
 
 export const EmployeeAttendanceView: React.FC<{ employeeId?: string }> = ({ employeeId }) => {
-  const { currentUser, users, attendanceRecords, todayDateStr } = useApp();
+  const { currentUser, users, attendanceRecords, exceptions, todayDateStr } = useApp();
   const [selectedMonth, setSelectedMonth] = useState(() => new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -16,10 +16,56 @@ export const EmployeeAttendanceView: React.FC<{ employeeId?: string }> = ({ empl
 
   const monthPrefix = `${selectedYear}-${selectedMonth < 10 ? `0${selectedMonth}` : selectedMonth}`;
 
-  const records = attendanceRecords
-    .filter(r => r.employee_id === targetUser.id && r.date.startsWith(monthPrefix))
-    .filter(r => (statusFilter === 'all' ? true : r.status === statusFilter))
-    .sort((a, b) => b.date.localeCompare(a.date));
+  const empRecords = attendanceRecords.filter(
+    r => r.employee_id === targetUser.id && r.date.startsWith(monthPrefix)
+  );
+  const empExceptions = exceptions.filter(
+    e => e.employee_id === targetUser.id && e.date.startsWith(monthPrefix)
+  );
+
+  const recMap = new Map(empRecords.map(r => [r.date, r]));
+  const excMap = new Map(empExceptions.map(e => [e.date, e]));
+
+  const records = Array.from(new Set([...recMap.keys(), ...excMap.keys()]))
+    .sort((a, b) => b.localeCompare(a))
+    .map(date => {
+      const rec = recMap.get(date);
+      const exc = excMap.get(date);
+
+      let effectiveStatus = rec?.status || exc?.type || 'present';
+      if (exc?.type === 'wfh' || rec?.status === 'wfh') {
+        effectiveStatus = 'wfh';
+      } else if (rec?.status === 'present' && (!exc || rec.total_working_minutes >= 420)) {
+        effectiveStatus = 'present';
+      } else if (exc) {
+        effectiveStatus = exc.type;
+      }
+
+      const totalMinutes =
+        effectiveStatus === 'absent'
+          ? 0
+          : rec && rec.total_working_minutes > 0
+          ? rec.total_working_minutes
+          : exc?.type === 'wfh'
+          ? 480
+          : exc?.type === 'half_day'
+          ? 240
+          : exc?.type === 'permission'
+          ? 300
+          : 0;
+
+      return {
+        id: rec?.id || exc?.id || date,
+        date,
+        login_time: effectiveStatus === 'absent' ? null : rec?.login_time || null,
+        logout_time: effectiveStatus === 'absent' ? null : rec?.logout_time || null,
+        total_working_minutes: totalMinutes,
+        status: effectiveStatus,
+        missed_logout: effectiveStatus === 'absent' ? false : rec?.missed_logout || false,
+        leaveType: exc?.leave_type
+      };
+    })
+    .filter(r => (statusFilter === 'all' ? true : r.status === statusFilter));
 
   // Calculate total minutes worked this month
   const totalMinutes = records.reduce((acc, r) => acc + (r.total_working_minutes || 0), 0);
@@ -166,6 +212,7 @@ export const EmployeeAttendanceView: React.FC<{ employeeId?: string }> = ({ empl
                     <td className="py-3.5 px-4">
                       <AttendanceStatusBadge
                         status={r.status}
+                        subLabel={r.leaveType}
                         missedLogout={r.missed_logout}
                       />
                     </td>

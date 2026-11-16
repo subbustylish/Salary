@@ -20,6 +20,7 @@ import { HolidayManagement } from './components/admin/HolidayManagement';
 import { SalaryManagement } from './components/admin/SalaryManagement';
 import { AuditLogView } from './components/admin/AuditLogView';
 import { NotificationSettingsView } from './components/admin/NotificationSettingsView';
+import { QuotaLockBanner } from './components/common/QuotaLockBanner';
 
 const MainLayout: React.FC = () => {
   const { currentUser } = useApp();
@@ -29,6 +30,7 @@ const MainLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>(isAdmin ? 'admin-dashboard' : 'dashboard');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [targetEmployeeId, setTargetEmployeeId] = useState<string | undefined>(undefined);
+  const [targetDateStr, setTargetDateStr] = useState<string | undefined>(undefined);
 
   // Sync default tab when user/role changes
   useEffect(() => {
@@ -44,18 +46,25 @@ const MainLayout: React.FC = () => {
   }, [currentUser?.role, isAdmin]);
 
   if (!currentUser) {
-    return <LoginView />;
+    return (
+      <div className="min-h-screen flex flex-col bg-slate-100">
+        <QuotaLockBanner />
+        <LoginView />
+      </div>
+    );
   }
 
-  const handleNavigate = (tab: string, employeeId?: string) => {
+  const handleNavigate = (tab: string, employeeId?: string, dateStr?: string) => {
     if (employeeId) {
       setTargetEmployeeId(employeeId);
     }
+    setTargetDateStr(dateStr);
     setActiveTab(tab);
   };
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
+      <QuotaLockBanner />
       <Header onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)} />
 
       <div className="flex-1 flex overflow-hidden">
@@ -102,7 +111,10 @@ const MainLayout: React.FC = () => {
                   <EmployeeManagement />
                 )}
                 {activeTab === 'admin-attendance' && (
-                  <AttendanceExplorer initialEmployeeId={targetEmployeeId} />
+                  <AttendanceExplorer
+                    initialEmployeeId={targetEmployeeId}
+                    initialDate={targetDateStr}
+                  />
                 )}
                 {activeTab === 'notifications' && (
                   <NotificationSettingsView />

@@ -85,6 +85,20 @@
         "timestamp": { "type": "string" }
       },
       "required": ["id", "user_name", "user_role", "action", "entity", "details", "timestamp"]
+    },
+    "AppSyncState": {
+      "title": "AppSyncState",
+      "description": "Shared daily Firestore usage counters and 50K/40K hard-stop circuit breaker lock state (resets midnight PT)",
+      "type": "object",
+      "properties": {
+        "datePt": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "readUnits": { "type": "number" },
+        "writeUnits": { "type": "number" },
+        "locked": { "type": "boolean" },
+        "lockReason": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["datePt", "readUnits", "writeUnits", "locked", "updatedAt"]
     }
   },
   "firestore": {
@@ -107,6 +121,10 @@
     "/audit_logs/{logId}": {
       "schema": "AuditLog",
       "description": "Collection of system action audit trails"
+    },
+    "/appMeta/{docId}": {
+      "schema": "AppSyncState",
+      "description": "Shared application metadata including appMeta/syncState daily 50K/40K circuit breaker lock"
     }
   }
 }

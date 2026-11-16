@@ -25,6 +25,12 @@ export const AttendanceRequestModal: React.FC<Props> = ({
 
   const [date, setDate] = useState(initialDate || todayDateStr);
   const [type, setType] = useState<ExceptionType>('absent');
+
+  useEffect(() => {
+    if (isOpen) {
+      setDate(initialDate || todayDateStr);
+    }
+  }, [isOpen, initialDate, todayDateStr]);
   const [leaveType, setLeaveType] = useState<LeaveType>('casual');
   const [permissionHours, setPermissionHours] = useState('1');
   const [reason, setReason] = useState('');

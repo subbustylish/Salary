@@ -35,6 +35,26 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    function isValidSyncState(data) {
+      return data is map
+        && data.keys().hasAll(['datePt', 'readUnits', 'writeUnits', 'locked', 'updatedAt'])
+        && data.keys().hasOnly(['datePt', 'readUnits', 'writeUnits', 'locked', 'lockReason', 'updatedAt'])
+        && data.datePt is string && data.datePt.size() == 10
+        && data.readUnits is number && data.readUnits >= 0 && data.readUnits <= 10000000
+        && data.writeUnits is number && data.writeUnits >= 0 && data.writeUnits <= 10000000
+        && data.locked is bool
+        && (!('lockReason' in data) || data.lockReason == null || (data.lockReason is string && data.lockReason.size() <= 200))
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    // Shared 50K/day Hard-Stop Circuit Breaker lock document (appMeta/syncState)
+    match /appMeta/{docId} {
+      allow get: if isValidId(docId) && docId == 'syncState';
+      allow list: if false;
+      allow create, update: if isValidId(docId) && docId == 'syncState' && isValidSyncState(request.resource.data);
+      allow delete: if false;
+    }
+
     // Default deny all other paths
     match /{document=**} {
       allow read, write: if false;

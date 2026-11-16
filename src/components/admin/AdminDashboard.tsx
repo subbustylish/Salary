@@ -14,15 +14,16 @@ import {
   Palmtree,
   Wallet,
   Activity,
-  Bell
+  Bell,
+  CalendarDays
 } from 'lucide-react';
-import { formatMinutesToDuration, formatTime } from '../../utils/dateUtils';
+import { formatMinutesToDuration, formatReadableDate, formatTime } from '../../utils/dateUtils';
 import { AttendanceStatusBadge } from '../common/AttendanceStatusBadge';
 import { WorkingHoursBadge } from '../common/WorkingHoursBadge';
 import { formatCurrency } from '../../utils/salaryCalculator';
 
 interface Props {
-  onNavigateTab: (tab: string, employeeId?: string) => void;
+  onNavigateTab: (tab: string, employeeId?: string, dateStr?: string) => void;
 }
 
 export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
@@ -58,10 +59,10 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
       }
 
       let status: 'present' | 'absent' | 'half_day' | 'permission' | 'wfh' | 'not_marked' = 'not_marked';
-      if (record?.status === 'present' && (!exception || record.total_working_minutes >= 420)) {
-        status = 'present';
-      } else if (exception?.type === 'wfh' || record?.status === 'wfh') {
+      if (exception?.type === 'wfh' || record?.status === 'wfh') {
         status = 'wfh';
+      } else if (record?.status === 'present' && (!exception || record.total_working_minutes >= 420)) {
+        status = 'present';
       } else if (exception?.type === 'permission' || record?.status === 'permission') {
         status = 'permission';
       } else if (exception?.type === 'half_day' || record?.status === 'half_day') {
@@ -112,6 +113,96 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
         return item.status === selectedDashboardFilter;
       })
     : [];
+
+  const [submissionRange, setSubmissionRange] = useState<'14d' | '7d' | 'all'>('14d');
+  const [submissionTypeFilter, setSubmissionTypeFilter] = useState<
+    'all' | 'wfh' | 'permission' | 'half_day' | 'absent'
+  >('all');
+
+  const recentSubmissions = React.useMemo(() => {
+    const userMap = new Map(users.map(u => [u.id, u]));
+    const itemsMap = new Map<
+      string,
+      {
+        id: string;
+        employeeId: string;
+        employeeName: string;
+        employeeCode: string;
+        department: string;
+        date: string;
+        type: 'wfh' | 'permission' | 'half_day' | 'absent';
+        leaveType?: string;
+        permissionMinutes?: number;
+        reason: string;
+        approvalStatus: string;
+        workingMinutes: number;
+      }
+    >();
+
+    exceptions.forEach(exc => {
+      const emp = userMap.get(exc.employee_id);
+      const matchingRec = attendanceRecords.find(
+        r => r.employee_id === exc.employee_id && r.date === exc.date
+      );
+      itemsMap.set(`${exc.employee_id}__${exc.date}`, {
+        id: exc.id,
+        employeeId: exc.employee_id,
+        employeeName: emp?.name || exc.employee_id,
+        employeeCode: emp?.employee_id || '-',
+        department: emp?.department || '-',
+        date: exc.date,
+        type: exc.type,
+        leaveType: exc.leave_type,
+        permissionMinutes: exc.permission_minutes,
+        reason: exc.reason || matchingRec?.notes || '-',
+        approvalStatus: exc.approval_status || 'approved',
+        workingMinutes: matchingRec?.total_working_minutes || 0
+      });
+    });
+
+    attendanceRecords.forEach(rec => {
+      if (rec.status === 'wfh' || rec.status === 'permission' || rec.status === 'half_day' || rec.status === 'absent') {
+        const key = `${rec.employee_id}__${rec.date}`;
+        if (!itemsMap.has(key)) {
+          const emp = userMap.get(rec.employee_id);
+          itemsMap.set(key, {
+            id: rec.id,
+            employeeId: rec.employee_id,
+            employeeName: emp?.name || rec.employee_id,
+            employeeCode: emp?.employee_id || '-',
+            department: emp?.department || '-',
+            date: rec.date,
+            type: rec.status,
+            reason: rec.notes || '-',
+            approvalStatus: 'recorded',
+            workingMinutes: rec.total_working_minutes || 0
+          });
+        }
+      }
+    });
+
+    const [ty, tm, td] = todayDateStr.split('-').map(Number);
+    const todayLocal = new Date(ty, tm - 1, td);
+    const cutoff7 = new Date(todayLocal);
+    cutoff7.setDate(todayLocal.getDate() - 7);
+    const cutoff14 = new Date(todayLocal);
+    cutoff14.setDate(todayLocal.getDate() - 14);
+
+    const toDateStr = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+    const cutoff7Str = toDateStr(cutoff7);
+    const cutoff14Str = toDateStr(cutoff14);
+
+    return Array.from(itemsMap.values())
+      .filter(item => {
+        if (submissionRange === '7d' && item.date < cutoff7Str) return false;
+        if (submissionRange === '14d' && item.date < cutoff14Str) return false;
+        if (submissionTypeFilter !== 'all' && item.type !== submissionTypeFilter) return false;
+        return true;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [users, exceptions, attendanceRecords, todayDateStr, submissionRange, submissionTypeFilter]);
 
   return (
     <div className="space-y-6">
@@ -400,6 +491,153 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
         </div>
       )}
 
+      {/* Recent & Past-Week WFH, Leave & Permission Submissions */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div>
+            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+              <CalendarDays className="w-4 h-4 text-sky-600" />
+              <span>Recent &amp; Past-Week WFH, Leave &amp; Permission Submissions</span>
+              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200">
+                {recentSubmissions.length}
+              </span>
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Tracks employee WFH requests, permissions, half-days, and leaves across past weeks &amp; upcoming dates
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Type filter */}
+            <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[11px]">
+              {(
+                [
+                  { id: 'all', label: 'All' },
+                  { id: 'wfh', label: 'WFH' },
+                  { id: 'permission', label: 'Permission' },
+                  { id: 'half_day', label: 'Half Day' },
+                  { id: 'absent', label: 'Leave' }
+                ] as const
+              ).map(f => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setSubmissionTypeFilter(f.id)}
+                  className={`px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer ${
+                    submissionTypeFilter === f.id
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Range filter */}
+            <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[11px]">
+              {(
+                [
+                  { id: '7d', label: 'Last 7 Days' },
+                  { id: '14d', label: 'Last 14 Days' },
+                  { id: 'all', label: 'All Dates' }
+                ] as const
+              ).map(r => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setSubmissionRange(r.id)}
+                  className={`px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer ${
+                    submissionRange === r.id
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {recentSubmissions.length === 0 ? (
+          <div className="p-6 text-center text-xs text-slate-500 bg-slate-50/50">
+            No {submissionTypeFilter === 'all' ? 'WFH, leave, or permission' : submissionTypeFilter.replace('_', ' ')} submissions found in this date range.
+            {submissionRange !== 'all' && (
+              <button
+                type="button"
+                onClick={() => setSubmissionRange('all')}
+                className="ml-2 text-blue-600 font-semibold hover:underline cursor-pointer"
+              >
+                View All Dates &rarr;
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto max-h-80 overflow-y-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold sticky top-0 z-10">
+                <tr>
+                  <th className="py-2.5 px-4">Date</th>
+                  <th className="py-2.5 px-4">Employee</th>
+                  <th className="py-2.5 px-4">Request Type</th>
+                  <th className="py-2.5 px-4">Reason / Details</th>
+                  <th className="py-2.5 px-4">Status</th>
+                  <th className="py-2.5 px-4 text-right">Inspect</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {recentSubmissions.map(item => (
+                  <tr key={`${item.employeeId}-${item.date}-${item.id}`} className="hover:bg-slate-50/70 transition-colors">
+                    <td className="py-2.5 px-4 whitespace-nowrap">
+                      <div className="font-mono font-bold text-slate-900">{item.date}</div>
+                      <div className="text-[10px] text-slate-400">
+                        {item.date === todayDateStr ? 'Today' : formatReadableDate(item.date)}
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <div className="font-bold text-slate-900">{item.employeeName}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        {item.employeeCode} · {item.department}
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <AttendanceStatusBadge
+                        status={item.type}
+                        subLabel={
+                          item.type === 'absent'
+                            ? item.leaveType
+                            : item.type === 'permission' && item.permissionMinutes
+                            ? `${Math.floor(item.permissionMinutes / 60)}h ${item.permissionMinutes % 60}m`
+                            : undefined
+                        }
+                      />
+                    </td>
+                    <td className="py-2.5 px-4 text-slate-700 max-w-xs truncate" title={item.reason}>
+                      {item.reason}
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 capitalize">
+                        {item.approvalStatus}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => onNavigateTab('admin-attendance', item.employeeId, item.date)}
+                        className="px-2.5 py-1 text-xs font-semibold text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors cursor-pointer"
+                      >
+                        Inspect &rarr;
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Quick Action Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div
@@ -499,21 +737,9 @@ export const AdminDashboard: React.FC<Props> = ({ onNavigateTab }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {users.map(u => {
-                const record = todayRecords.find(r => r.employee_id === u.id);
-                const exception = todayExceptions.find(e => e.employee_id === u.id);
-                const isActive = !!(record?.login_time && !record?.logout_time);
-
-                let liveWorkingMinutes = record?.total_working_minutes || 0;
-                if (isActive && record?.login_time) {
-                  const startMs = new Date(record.login_time).getTime();
-                  liveWorkingMinutes = Math.max(1, Math.floor((liveNow.getTime() - startMs) / 60000));
-                }
-
-                let statusDisplay: any = record?.status || (exception ? exception.type : 'not_marked');
-                if (u.status === 'inactive') {
-                  statusDisplay = 'not_marked';
-                }
+              {todayEmployeeDetails.map(detail => {
+                const { user: u, record, isActive, liveWorkingMinutes, status } = detail;
+                const statusDisplay = u.status === 'inactive' ? 'not_marked' : status;
 
                 return (
                   <tr key={u.id} className="hover:bg-slate-50/70 transition-colors">

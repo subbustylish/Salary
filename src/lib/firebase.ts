@@ -1,7 +1,8 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import { getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { checkSharedSyncState, isCircuitBreakerLocked } from './circuitBreaker';
 
 const app = initializeApp(firebaseConfig);
 
@@ -56,16 +57,18 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Validate Connection to Firestore on boot
+// Validate Connection to Firestore on boot & check shared appMeta/syncState lock (0 extra reads)
 export async function testFirestoreConnection(): Promise<boolean> {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    return true;
+    if (isCircuitBreakerLocked()) {
+      return false;
+    }
+    const syncState = await checkSharedSyncState(db, false);
+    return !syncState.locked;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error('Please check your Firebase configuration.');
     }
-    // Non-existent document is normal for a fresh connection test
     return true;
   }
 }
